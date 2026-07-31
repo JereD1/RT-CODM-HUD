@@ -50,13 +50,15 @@ class Templates:
     def __init__(self):
         dead_rgb = _load_asset("dead")
         alive_rgb = _load_asset("alive")
-        alive_half_rgb = _load_asset("alive-half")
+        lowhp_rgbs = [_load_asset(f"lowhp{i}") for i in (1, 2, 3)]
+        lowhp_rgbs = [r for r in lowhp_rgbs if r is not None]
 
         self.dead = _luminance(dead_rgb) if dead_rgb is not None else None
         self.alive = _luminance(alive_rgb) if alive_rgb is not None else None
-        self.alive_half = _luminance(alive_half_rgb) if alive_half_rgb is not None else None
+        self.lowhp = [_luminance(r) for r in lowhp_rgbs]
 
-        loaded = [n for n, v in [("dead", self.dead), ("alive", self.alive), ("alive-half", self.alive_half)] if v is not None]
+        loaded = [n for n, v in [("dead", self.dead), ("alive", self.alive)] if v is not None]
+        loaded += [f"lowhp{i+1}" for i in range(len(self.lowhp))]
         print(f"Templates loaded: {', '.join(loaded) if loaded else '(none found in assets/)'}")
 
 
@@ -113,9 +115,9 @@ def analyse_frame(rgb: np.ndarray, templates: Templates) -> dict:
         if templates.alive is not None:
             scaled = _resize_nearest(lum, *templates.alive.shape)
             alive_sim = max(alive_sim, _ncc_similarity(scaled, templates.alive))
-        if templates.alive_half is not None:
-            scaled = _resize_nearest(lum, *templates.alive_half.shape)
-            alive_sim = max(alive_sim, _ncc_similarity(scaled, templates.alive_half))
+        for lowhp_template in templates.lowhp:
+            scaled = _resize_nearest(lum, *lowhp_template.shape)
+            alive_sim = max(alive_sim, _ncc_similarity(scaled, lowhp_template))
 
     return {
         "brightness": brightness,

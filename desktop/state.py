@@ -26,9 +26,6 @@ class PlayerState:
 
 
 def evaluate(state: PlayerState, signal: dict) -> tuple[bool, str]:
-    """Feeds one frame's analysis signal into a player's rolling state
-    machine. Returns (flipped, status_label) — a faithful port of
-    main.js's analyse-batch handler, warm-up phase included."""
     brightness = signal["brightness"]
     low_health = signal["low_health"]
     pixel_votes = signal["pixel_votes"]
@@ -50,10 +47,12 @@ def evaluate(state: PlayerState, signal: dict) -> tuple[bool, str]:
     sigma_votes_dead = brightness < dead_threshold
     ncc_votes_dead = (
         True if not signal["has_dead_template"]
-        else (dead_sim >= DEAD_SIM_THRESHOLD and alive_sim < ALIVE_SIM_THRESHOLD)
+        else (dead_sim >= DEAD_SIM_THRESHOLD and dead_sim > alive_sim)
     )
 
-    frame_is_dead = (not low_health) and pixel_votes >= 3 and sigma_votes_dead and ncc_votes_dead
+    frame_is_dead = (not low_health) and (
+        pixel_votes >= 3 or (sigma_votes_dead and ncc_votes_dead)
+    )
 
     if not state.is_dead:
         if frame_is_dead:
