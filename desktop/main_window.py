@@ -479,7 +479,7 @@ class MainWindow(QMainWindow):
                 changed = True
 
         if changed and self.broadcast_id:
-            ok, info = post_alive_status(self.broadcast_id, self.team_alive[0], self.team_alive[1])
+            ok, info = post_alive_status(self.broadcast_id, self.session["broadcastToken"], self.team_alive[0], self.team_alive[1])
             self.last_push_ok = ok
             self.consecutive_push_failures = 0 if ok else self.consecutive_push_failures + 1
             self.status_bar_label.setText(f"{'✓ posted' if ok else '✗ post failed'} — {info}")
@@ -509,7 +509,7 @@ class MainWindow(QMainWindow):
             state.consecutive_alive = 0
         self.team_alive = {0: [True] * PLAYERS_PER_TEAM, 1: [True] * PLAYERS_PER_TEAM}
         if self.broadcast_id:
-            ok, _ = post_alive_status(self.broadcast_id, self.team_alive[0], self.team_alive[1])
+            ok, _ = post_alive_status(self.broadcast_id, self.session["broadcastToken"], self.team_alive[0], self.team_alive[1])
             self.last_push_ok = ok
             self.consecutive_push_failures = 0 if ok else self.consecutive_push_failures + 1
         if self.overlay_window:
