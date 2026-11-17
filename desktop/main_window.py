@@ -2,11 +2,11 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, parse_qs
 
-from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QImage, QPixmap, QKeySequence, QShortcut
+from PySide6.QtCore import QTimer, Qt, QRectF
+from PySide6.QtGui import QImage, QPixmap, QKeySequence, QShortcut, QPainter, QColor, QPainterPath
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
-    QLabel, QPushButton, QMessageBox, QLineEdit, QFrame, QCheckBox,
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QLabel, QPushButton, QMessageBox, QLineEdit, QFrame, QCheckBox, QSizePolicy,
 )
 import numpy as np
 import mss
@@ -21,87 +21,100 @@ from overlay_window import OverlayWindow
 import auth
 
 
-STYLESHEET = """
-QWidget {
-    background-color: #12141a;
-    color: #e5e7eb;
-    font-family: 'Segoe UI', sans-serif;
+# ── Look ──────────────────────────────────────────────────────────────────────
+# Dark broadcast-desk palette; the two teams use the HUD's own colours
+# (blue left, amber right) so a row reads at a glance.
+BG       = "#0b0d12"
+SURFACE  = "#12151d"
+SURFACE2 = "#181c26"
+BORDER   = "#232838"
+TEXT     = "#e8eaf0"
+MUTED    = "#8b93a7"
+FAINT    = "#5b6275"
+ACCENT   = "#ffc83d"
+TEAM_COLORS = ["#3ba7ff", "#ffb020"]
+
+STATUS_COLORS = {
+    "alive":  ("#3ddc84", "#0e2a1b"),
+    "low":    ("#ffb020", "#2d2210"),
+    "dead":   ("#ff5c5c", "#2e1215"),
+    "paused": ("#8b93a7", "#1c202b"),
+    "—":      ("#5b6275", "#161a23"),
+}
+
+STYLESHEET = f"""
+QMainWindow, #root {{ background: {BG}; }}
+QWidget {{
+    color: {TEXT};
+    font-family: 'Segoe UI', 'Inter', sans-serif;
     font-size: 13px;
-}
-QGroupBox {
-    background-color: #1a1d26;
-    border: 1px solid #2a2e3a;
-    border-radius: 8px;
-    margin-top: 16px;
-    padding: 12px 8px 8px 8px;
-    font-weight: 600;
-    font-size: 13px;
-    color: #9ca3af;
-}
-QGroupBox::title {
-    subcontrol-origin: margin;
-    left: 10px;
-    padding: 0 6px;
-    color: #d1d5db;
-}
-QPushButton {
-    background-color: #232838;
-    border: 1px solid #363c4d;
-    border-radius: 6px;
-    padding: 6px 14px;
-    color: #e5e7eb;
-}
-QPushButton:hover {
-    background-color: #2d3444;
-    border-color: #4b5563;
-}
-QPushButton:pressed {
-    background-color: #1a1d26;
-}
-QLineEdit {
-    background-color: #1a1d26;
-    border: 1px solid #2a2e3a;
-    border-radius: 6px;
-    padding: 6px 8px;
-}
-QLineEdit:focus {
-    border: 1px solid #3b82f6;
-}
-QCheckBox {
-    color: #9ca3af;
-}
-#primaryButton {
-    background-color: #16532d;
-    border: 1px solid #22c55e;
-    color: #dcfce7;
-    font-weight: 600;
-    font-size: 14px;
-    padding: 10px 20px;
-}
-#primaryButton:hover { background-color: #1a6636; }
-#stopButton {
-    background-color: #5c1a1a;
-    border: 1px solid #f87171;
-    color: #fee2e2;
-    font-weight: 600;
-    font-size: 14px;
-    padding: 10px 20px;
-}
-#stopButton:hover { background-color: #6e1f1f; }
-#topBar, #healthBar {
-    background-color: #1a1d26;
-    border: 1px solid #2a2e3a;
-    border-radius: 8px;
-}
-#warningBanner {
-    background-color: #3a1414;
-    border: 1px solid #f87171;
-    border-radius: 6px;
-    color: #fecaca;
-    font-weight: 600;
-    padding: 8px 12px;
-}
+}}
+QLabel {{ background: transparent; }}
+
+#header {{ background: {SURFACE}; border-bottom: 1px solid {BORDER}; }}
+#brandMark {{
+    background: {ACCENT}; color: #111; border-radius: 8px;
+    font-weight: 900; font-size: 13px;
+}}
+#brandTitle {{ font-size: 17px; font-weight: 800; letter-spacing: 0.5px; }}
+#brandSub {{ color: {MUTED}; font-size: 11px; letter-spacing: 1.5px; }}
+
+#card {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 12px; }}
+#cardTitle {{ color: {MUTED}; font-size: 11px; font-weight: 700; letter-spacing: 1.6px; }}
+#hint {{ color: {FAINT}; font-size: 12px; }}
+
+QLineEdit {{
+    background: {SURFACE2}; border: 1px solid {BORDER}; border-radius: 8px;
+    padding: 9px 12px; selection-background-color: {ACCENT}; selection-color: #111;
+}}
+QLineEdit:focus {{ border: 1px solid {ACCENT}; }}
+
+QPushButton {{
+    background: {SURFACE2}; border: 1px solid {BORDER}; border-radius: 8px;
+    padding: 8px 14px; font-weight: 600;
+}}
+QPushButton:hover {{ background: #20253a; border-color: #343b52; }}
+QPushButton:pressed {{ background: {SURFACE}; }}
+#accentButton {{ background: {ACCENT}; color: #111; border: none; padding: 9px 18px; }}
+#accentButton:hover {{ background: #ffd76b; }}
+#ghostButton {{ background: transparent; border: 1px solid {BORDER}; color: {MUTED}; padding: 5px 10px; font-size: 12px; }}
+#ghostButton:hover {{ color: {TEXT}; border-color: #3a4259; }}
+
+#startButton {{
+    background: #1ec46b; color: #04170c; border: none; border-radius: 10px;
+    font-size: 15px; font-weight: 800; padding: 14px 26px; letter-spacing: 0.5px;
+}}
+#startButton:hover {{ background: #33d47c; }}
+#stopButton {{
+    background: #ff5c5c; color: #1d0405; border: none; border-radius: 10px;
+    font-size: 15px; font-weight: 800; padding: 14px 26px; letter-spacing: 0.5px;
+}}
+#stopButton:hover {{ background: #ff7676; }}
+
+#teamCount {{ font-size: 22px; font-weight: 800; }}
+#teamCountSub {{ color: {MUTED}; font-size: 11px; letter-spacing: 1px; }}
+#playerRow {{ background: {SURFACE2}; border: 1px solid {BORDER}; border-radius: 10px; }}
+#detail {{ color: {FAINT}; font-size: 11px; font-family: 'Cascadia Mono', Consolas, monospace; }}
+#region {{ color: {FAINT}; font-size: 11px; }}
+
+#warningBanner {{
+    background: #2e1215; border: 1px solid #ff5c5c; border-radius: 10px;
+    color: #ffd0d0; font-weight: 600; padding: 10px 14px;
+}}
+#footer {{ color: {FAINT}; font-size: 12px; }}
+QCheckBox {{ color: {MUTED}; spacing: 6px; }}
+QCheckBox::indicator {{ width: 16px; height: 16px; border-radius: 4px; border: 1px solid #3a4259; background: {SURFACE2}; }}
+QCheckBox::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; }}
+QToolTip {{ background: {SURFACE2}; color: {TEXT}; border: 1px solid {BORDER}; padding: 6px; }}
 """
+
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    """'#3ba7ff', 0.15 → 'rgba(59, 167, 255, 38)'. Qt reads 8-digit hex as
+    #AARRGGBB, so transparency is always written this way."""
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r}, {g}, {b}, {round(alpha * 255)})"
 
 
 def _rgb_to_pixmap(rgb: np.ndarray) -> QPixmap:
@@ -112,96 +125,148 @@ def _rgb_to_pixmap(rgb: np.ndarray) -> QPixmap:
 
 
 def _pill(label: QLabel, text: str, ok: bool | None):
-    """ok=True → green, ok=False → red, ok=None → neutral grey."""
-    fg, bg = {"ok": ("#4ade80", "#0f2b18"), "bad": ("#f87171", "#2b0f0f"),
-              "neutral": ("#9ca3af", "#20242e")}[
-        "ok" if ok is True else "bad" if ok is False else "neutral"]
-    label.setText(text)
+    """A status chip with a coloured dot. ok=True green, False red, None grey."""
+    fg, bg = {True: ("#3ddc84", "#0e2a1b"), False: ("#ff5c5c", "#2e1215"),
+              None: ("#8b93a7", "#1c202b")}[ok]
+    label.setText(f"<span style='color:{fg}'>●</span>&nbsp; {text}")
     label.setStyleSheet(
-        f"color: {fg}; background-color: {bg}; border-radius: 5px; "
-        f"font-weight: 600; padding: 3px 10px;")
+        f"color: {TEXT if ok is not None else MUTED}; background: {bg}; border: 1px solid {_rgba(fg, 0.25)}; "
+        f"border-radius: 13px; font-weight: 600; font-size: 12px; padding: 4px 12px;")
 
 
-class SlotRow(QWidget):
+class HealthBar(QWidget):
+    """Thin rounded bar showing a player's health, coloured by status."""
+
+    def __init__(self):
+        super().__init__()
+        self.value = 0.0
+        self.color = QColor(FAINT)
+        self.setFixedHeight(6)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+    def set_value(self, value: float, color: str):
+        self.value = max(0.0, min(1.0, value))
+        self.color = QColor(color)
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(self.rect())
+        track = QPainterPath()
+        track.addRoundedRect(r, 3, 3)
+        p.fillPath(track, QColor(BORDER))
+        if self.value > 0:
+            fill = QPainterPath()
+            fill.addRoundedRect(QRectF(r.x(), r.y(), r.width() * self.value, r.height()), 3, 3)
+            p.fillPath(fill, self.color)
+
+
+class SlotRow(QFrame):
+    """One player: live thumbnail of their HUD card, status, health and the
+    detector's reasons, with a button to pick the box by hand."""
+
     def __init__(self, team_index: int, player_index: int, on_pick_region):
         super().__init__()
+        self.setObjectName("playerRow")
         self.team_index = team_index
         self.player_index = player_index
         self.region = None
+        team_color = TEAM_COLORS[team_index % len(TEAM_COLORS)]
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(4, 3, 4, 3)
-        layout.setSpacing(8)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(12)
 
-        self.name_label = QLabel(f"P{player_index + 1}")
-        self.name_label.setFixedWidth(26)
-        self.name_label.setStyleSheet("color: #9ca3af; font-weight: 600;")
+        self.name_label = QLabel(f"{'LR'[team_index] if team_index < 2 else 'T'}{player_index + 1}")
+        self.name_label.setFixedSize(34, 34)
+        self.name_label.setAlignment(Qt.AlignCenter)
+        self.name_label.setStyleSheet(
+            f"background: {_rgba(team_color, 0.14)}; color: {team_color}; border: 1px solid {_rgba(team_color, 0.45)}; "
+            f"border-radius: 8px; font-weight: 800; font-size: 13px;")
 
+        # Same shape as a HUD card (101 × 108 at 1080p)
         self.thumb_label = QLabel()
-        self.thumb_label.setFixedSize(48, 30)
+        self.thumb_label.setFixedSize(44, 47)
+        self.thumb_label.setAlignment(Qt.AlignCenter)
         self.thumb_label.setStyleSheet(
-            "background: #0a0b0e; border: 1px solid #2a2e3a; border-radius: 4px;")
+            f"background: {BG}; border: 1px solid {BORDER}; border-radius: 6px; color: {FAINT}; font-size: 10px;")
 
-        self.region_label = QLabel("no region")
-        self.region_label.setFixedWidth(150)
-        self.region_label.setStyleSheet("color: #6b7280;")
-
-        self.pick_btn = QPushButton("Pick")
-        self.pick_btn.setFixedWidth(52)
-        self.pick_btn.clicked.connect(lambda: on_pick_region(self))
-
+        middle = QVBoxLayout()
+        middle.setSpacing(5)
+        top = QHBoxLayout()
+        top.setSpacing(8)
         self.status_label = QLabel("—")
-        self.status_label.setFixedWidth(64)
         self.status_label.setAlignment(Qt.AlignCenter)
-
+        self.status_label.setFixedWidth(70)
+        self.health_text = QLabel("")
+        self.health_text.setStyleSheet(f"color: {MUTED}; font-weight: 700; font-size: 12px;")
+        top.addWidget(self.status_label)
+        top.addWidget(self.health_text)
+        top.addStretch()
+        self.health_bar = HealthBar()
         self.signal_label = QLabel("")
-        self.signal_label.setStyleSheet("color: #6b7280; font-size: 10px; font-family: Consolas, monospace;")
+        self.signal_label.setObjectName("detail")
+        middle.addLayout(top)
+        middle.addWidget(self.health_bar)
+        middle.addWidget(self.signal_label)
+
+        right = QVBoxLayout()
+        right.setSpacing(4)
+        self.pick_btn = QPushButton("Pick box")
+        self.pick_btn.setObjectName("ghostButton")
+        self.pick_btn.setCursor(Qt.PointingHandCursor)
+        self.pick_btn.clicked.connect(lambda: on_pick_region(self))
+        self.region_label = QLabel("no box")
+        self.region_label.setObjectName("region")
+        self.region_label.setAlignment(Qt.AlignRight)
+        right.addWidget(self.pick_btn, alignment=Qt.AlignRight)
+        right.addWidget(self.region_label)
 
         layout.addWidget(self.name_label)
         layout.addWidget(self.thumb_label)
-        layout.addWidget(self.pick_btn)
-        layout.addWidget(self.region_label)
-        layout.addWidget(self.status_label)
-        layout.addWidget(self.signal_label)
-        layout.addStretch()
+        layout.addLayout(middle, 1)
+        layout.addLayout(right)
 
+        self.set_region(None)
         self.set_status("—")
 
     def set_region(self, region):
         self.region = region
         if region:
-            self.region_label.setText(f"{region['width']}×{region['height']} @ {region['left']},{region['top']}")
-            self.region_label.setStyleSheet("color: #6b7280;")
+            self.region_label.setText(f"{region['width']}×{region['height']} at {region['left']},{region['top']}")
+            self.region_label.setStyleSheet("")
+            self.region_label.setToolTip("Where this player's card is captured from")
         else:
-            self.region_label.setText("no region")
+            self.region_label.setText("no box yet")
+            self.thumb_label.setText("—")
 
     def flag_monitor_missing(self):
-        self.region_label.setText((self.region_label.text() or "") + "  ⚠")
-        self.region_label.setStyleSheet("color: #f87171; font-weight: 600;")
+        self.region_label.setText("⚠ monitor missing")
+        self.region_label.setStyleSheet("color: #ff5c5c; font-weight: 700;")
 
     def set_status(self, status: str, info: dict | None = None):
-        styles = {
-            "alive": ("#4ade80", "#0f2b18"), "dead": ("#f87171", "#2b0f0f"),
-            "low": ("#fbbf24", "#2b2410"), "paused": ("#94a3b8", "#1a1d26"),
-            "—": ("#6b7280", "#1a1d26"),
-        }
-        fg, bg = styles.get(status, ("#9ca3af", "#1a1d26"))
-        self.status_label.setText(status)
+        fg, bg = STATUS_COLORS.get(status, STATUS_COLORS["—"])
+        self.status_label.setText(status.upper() if status != "—" else "IDLE")
         self.status_label.setStyleSheet(
-            f"color: {fg}; background-color: {bg}; border-radius: 5px; "
-            f"font-weight: 600; padding: 2px 8px;")
+            f"color: {fg}; background: {bg}; border: 1px solid {_rgba(fg, 0.35)}; border-radius: 6px; "
+            f"font-weight: 800; font-size: 11px; letter-spacing: 1px; padding: 3px 0;")
+        health = (info or {}).get("health", 0.0) if status in ("alive", "low") else 0.0
+        self.health_bar.set_value(health if status in ("alive", "low") else 0.0, fg)
+        self.health_text.setText(f"{health:.0%} HP" if status in ("alive", "low") else "")
         if status == "paused":
             self.signal_label.setText("HUD hidden — holding")
         elif info:
             change = info.get("change")
             self.signal_label.setText(
-                f"hp {info.get('health', 0):.0%}  bar {info.get('run', 0)}px  "
-                f"portrait change {'—' if change is None else f'{change:.2f}'}")
+                f"bar {info.get('run', 0)}px · portrait change {'—' if change is None else f'{change:.2f}'}")
         else:
             self.signal_label.setText("")
 
     def set_thumbnail(self, rgb: np.ndarray):
-        pix = _rgb_to_pixmap(rgb).scaled(self.thumb_label.width(), self.thumb_label.height())
+        pix = _rgb_to_pixmap(rgb).scaled(
+            self.thumb_label.width() - 2, self.thumb_label.height() - 2,
+            Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
         self.thumb_label.setPixmap(pix)
 
 
@@ -209,7 +274,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Realtime CODM HUD")
-        self.resize(900, 640)
+        self.resize(1120, 760)
+        self.setMinimumSize(980, 680)
         self.setStyleSheet(STYLESHEET)
 
         self.session = auth.load_cached_session()
@@ -222,6 +288,7 @@ class MainWindow(QMainWindow):
         }
         self.team_alive = {0: [True] * PLAYERS_PER_TEAM, 1: [True] * PLAYERS_PER_TEAM}
         self.slots = {}
+        self.team_counts = {}
         self.overlay_window = None
         self.running = False
         self.consecutive_push_failures = 0
@@ -236,6 +303,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._load_layout()
         self._update_health_bar()
+        self._update_team_counts()
 
         self.timer = QTimer(self)
         self.timer.setInterval(POLL_INTERVAL_MS)
@@ -253,108 +321,170 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self):
         central = QWidget()
-        root = QVBoxLayout(central)
-        root.setContentsMargins(14, 14, 14, 14)
-        root.setSpacing(10)
+        central.setObjectName("root")
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # ── Header: brand on the left, system status chips on the right ──
+        header = QFrame()
+        header.setObjectName("header")
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(20, 14, 20, 14)
+        hl.setSpacing(12)
+        mark = QLabel("RT")
+        mark.setObjectName("brandMark")
+        mark.setFixedSize(36, 36)
+        mark.setAlignment(Qt.AlignCenter)
+        brand = QVBoxLayout()
+        brand.setSpacing(0)
+        title = QLabel("CODM HUD")
+        title.setObjectName("brandTitle")
+        sub = QLabel("REALTIME PRODUCTION · LIVE DEATH TRACKER")
+        sub.setObjectName("brandSub")
+        brand.addWidget(title)
+        brand.addWidget(sub)
+        hl.addWidget(mark)
+        hl.addLayout(brand)
+        hl.addStretch()
+        self.health_overlay = QLabel()
+        self.health_capture = QLabel()
+        self.health_monitors = QLabel()
+        self.health_push = QLabel()
+        for lbl in (self.health_overlay, self.health_capture, self.health_monitors, self.health_push):
+            hl.addWidget(lbl)
+        outer.addWidget(header)
+
+        body = QVBoxLayout()
+        body.setContentsMargins(20, 16, 20, 16)
+        body.setSpacing(14)
+        outer.addLayout(body, 1)
 
         # ── Warning banner — hidden unless something needs attention ──
         self.warning_banner = QLabel("")
         self.warning_banner.setObjectName("warningBanner")
         self.warning_banner.setWordWrap(True)
         self.warning_banner.hide()
-        root.addWidget(self.warning_banner)
+        body.addWidget(self.warning_banner)
 
-        # ── System health strip — always visible, at a glance ──
-        health_bar = QFrame()
-        health_bar.setObjectName("healthBar")
-        health_layout = QHBoxLayout(health_bar)
-        health_layout.setContentsMargins(12, 8, 12, 8)
-        health_layout.setSpacing(10)
-        self.health_overlay = QLabel()
-        self.health_capture = QLabel()
-        self.health_monitors = QLabel()
-        self.health_push = QLabel()
-        for lbl in (self.health_overlay, self.health_capture, self.health_monitors, self.health_push):
-            health_layout.addWidget(lbl)
-        health_layout.addStretch()
-        always_on_top_cb = QCheckBox("Always on top")
-        always_on_top_cb.toggled.connect(self._toggle_always_on_top)
-        health_layout.addWidget(always_on_top_cb)
-        root.addWidget(health_bar)
-
-        # ── Overlay connect + monitor info ──
-        top_bar = QFrame()
-        top_bar.setObjectName("topBar")
-        top_layout = QVBoxLayout(top_bar)
-        top_layout.setContentsMargins(12, 10, 12, 10)
-        top_layout.setSpacing(8)
-
-        broadcast_row = QHBoxLayout()
+        # ── Overlay connection ──
+        connect_card = QFrame()
+        connect_card.setObjectName("card")
+        cl = QVBoxLayout(connect_card)
+        cl.setContentsMargins(16, 12, 16, 12)
+        cl.setSpacing(8)
+        connect_title = QLabel("SCOREBOARD OVERLAY")
+        connect_title.setObjectName("cardTitle")
+        cl.addWidget(connect_title)
+        row = QHBoxLayout()
+        row.setSpacing(8)
         self.broadcast_input = QLineEdit()
-        self.broadcast_input.setPlaceholderText("Paste the Scoreboard overlay link or token from Studio (Ctrl+L)")
-        connect_btn = QPushButton("Connect overlay")
+        self.broadcast_input.setPlaceholderText("Paste the Scoreboard overlay link from Studio  (Ctrl+L)")
+        connect_btn = QPushButton("Connect")
+        connect_btn.setObjectName("accentButton")
+        connect_btn.setCursor(Qt.PointingHandCursor)
         connect_btn.clicked.connect(self._handle_connect_overlay)
-        broadcast_row.addWidget(self.broadcast_input)
-        broadcast_row.addWidget(connect_btn)
-        top_layout.addLayout(broadcast_row)
-
+        self.broadcast_input.returnPressed.connect(self._handle_connect_overlay)
+        row.addWidget(self.broadcast_input, 1)
+        row.addWidget(connect_btn)
+        cl.addLayout(row)
         self.monitor_label = QLabel(self._monitor_label_text())
-        self.monitor_label.setStyleSheet("color: #6b7280; font-size: 12px;")
-        top_layout.addWidget(self.monitor_label)
-        root.addWidget(top_bar)
+        self.monitor_label.setObjectName("hint")
+        cl.addWidget(self.monitor_label)
+        body.addWidget(connect_card)
 
         # ── Teams ──
-        teams_row = QHBoxLayout()
-        teams_row.setSpacing(12)
+        teams = QHBoxLayout()
+        teams.setSpacing(14)
         for team in range(NUM_TEAMS):
-            box = QGroupBox(f"Team {team + 1}")
-            box_layout = QVBoxLayout(box)
-            box_layout.setSpacing(4)
+            color = TEAM_COLORS[team % len(TEAM_COLORS)]
+            card = QFrame()
+            card.setObjectName("card")
+            tl = QVBoxLayout(card)
+            tl.setContentsMargins(14, 12, 14, 14)
+            tl.setSpacing(8)
+
+            head = QHBoxLayout()
+            stripe = QFrame()
+            stripe.setFixedSize(4, 30)
+            stripe.setStyleSheet(f"background: {color}; border-radius: 2px;")
+            names = QVBoxLayout()
+            names.setSpacing(0)
+            team_title = QLabel(f"TEAM {team + 1}")
+            team_title.setObjectName("cardTitle")
+            side = QLabel("Left side of the HUD" if team == 0 else "Right side of the HUD")
+            side.setObjectName("hint")
+            names.addWidget(team_title)
+            names.addWidget(side)
+            count = QLabel("5/5")
+            count.setObjectName("teamCount")
+            count.setStyleSheet(f"color: {color};")
+            count_sub = QLabel("ALIVE")
+            count_sub.setObjectName("teamCountSub")
+            counts = QVBoxLayout()
+            counts.setSpacing(0)
+            counts.addWidget(count, alignment=Qt.AlignRight)
+            counts.addWidget(count_sub, alignment=Qt.AlignRight)
+            head.addWidget(stripe)
+            head.addSpacing(6)
+            head.addLayout(names)
+            head.addStretch()
+            head.addLayout(counts)
+            tl.addLayout(head)
+            self.team_counts[team] = count
+
             for player in range(PLAYERS_PER_TEAM):
-                row = SlotRow(team, player, self._pick_region)
-                self.slots[(team, player)] = row
-                box_layout.addWidget(row)
-            teams_row.addWidget(box)
-        root.addLayout(teams_row)
+                slot = SlotRow(team, player, self._pick_region)
+                self.slots[(team, player)] = slot
+                tl.addWidget(slot)
+            teams.addWidget(card, 1)
+        body.addLayout(teams, 1)
 
-        # ── Primary action ──
-        primary_row = QHBoxLayout()
-        self.start_btn = QPushButton("Start capture  (F9)")
-        self.start_btn.setObjectName("primaryButton")
+        # ── Actions ──
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        self.start_btn = QPushButton("▶  START CAPTURE   F9")
+        self.start_btn.setObjectName("startButton")
+        self.start_btn.setCursor(Qt.PointingHandCursor)
         self.start_btn.clicked.connect(self._toggle_capture)
-        primary_row.addWidget(self.start_btn)
-        root.addLayout(primary_row)
+        actions.addWidget(self.start_btn, 2)
+        for text, tip, handler in (
+            ("Quick setup", "Place all 10 boxes on the HUD cards at once (Ctrl+Shift+R)", self._quick_setup),
+            ("Reset all", "Everyone alive, readings cleared, overlay updated", self._reset_all),
+            ("Set all alive", "Everyone alive and the overlay updated", self._set_all_alive),
+            ("Mini window", "A small always-on-top strip of dots showing who is alive", self._toggle_overlay_window),
+        ):
+            b = QPushButton(text)
+            b.setToolTip(tip)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setMinimumHeight(48)
+            b.clicked.connect(handler)
+            actions.addWidget(b, 1)
+        body.addLayout(actions)
 
-        # ── Secondary controls ──
-        controls = QHBoxLayout()
-        controls.setSpacing(8)
-        quick_setup_btn = QPushButton("Quick setup (10 boxes)")
-        quick_setup_btn.clicked.connect(self._quick_setup)
-        reset_btn = QPushButton("Reset all")
-        reset_btn.clicked.connect(self._reset_all)
-        alive_btn = QPushButton("Set all alive")
-        alive_btn.clicked.connect(self._set_all_alive)
-        overlay_btn = QPushButton("Toggle overlay window")
-        overlay_btn.clicked.connect(self._toggle_overlay_window)
-        controls.addWidget(quick_setup_btn)
-        controls.addWidget(reset_btn)
-        controls.addWidget(alive_btn)
-        controls.addWidget(overlay_btn)
-        root.addLayout(controls)
-
-        self.status_bar_label = QLabel("")
-        self.status_bar_label.setStyleSheet("color: #6b7280; font-size: 12px;")
-        root.addWidget(self.status_bar_label)
+        footer = QHBoxLayout()
+        self.status_bar_label = QLabel("Ready. Connect the overlay, run Quick setup, then start capture.")
+        self.status_bar_label.setObjectName("footer")
+        always_on_top_cb = QCheckBox("Always on top")
+        always_on_top_cb.toggled.connect(self._toggle_always_on_top)
+        footer.addWidget(self.status_bar_label, 1)
+        footer.addWidget(always_on_top_cb)
+        body.addLayout(footer)
 
         self.setCentralWidget(central)
+
+    def _update_team_counts(self):
+        for team, label in self.team_counts.items():
+            alive = sum(self.team_alive[team])
+            label.setText(f"{alive}/{len(self.team_alive[team])}")
 
     # ── Health bar / warning banner ──────────────────────────────────
     def _update_health_bar(self):
         _pill(self.health_overlay,
-              "Overlay: connected" if self.broadcast_id else "Overlay: not connected",
+              "Overlay connected" if self.broadcast_id else "Overlay not connected",
               True if self.broadcast_id else False)
         _pill(self.health_capture,
-              "Capture: running" if self.running else "Capture: stopped",
+              "Capturing" if self.running else "Capture stopped",
               True if self.running else None)
 
         current_sigs = {monitor_signature(m) for m in list_monitors(self.sct)}
@@ -362,13 +492,13 @@ class MainWindow(QMainWindow):
             row.region and row.region.get("monitor") and row.region["monitor"] not in current_sigs
             for row in self.slots.values()
         )
-        _pill(self.health_monitors, "Monitors: missing one" if missing else "Monitors: ok",
+        _pill(self.health_monitors, "Monitor missing" if missing else "Monitors OK",
               False if missing else True)
 
         if self.last_push_ok is None:
-            _pill(self.health_push, "Last push: —", None)
+            _pill(self.health_push, "No pushes yet", None)
         else:
-            _pill(self.health_push, "Last push: ok" if self.last_push_ok else "Last push: failed",
+            _pill(self.health_push, "Last push OK" if self.last_push_ok else "Last push failed",
                   self.last_push_ok)
 
         self._update_warning_banner(missing)
@@ -470,8 +600,8 @@ class MainWindow(QMainWindow):
 
     def _toggle_capture(self):
         self.running = not self.running
-        self.start_btn.setText("Stop capture  (F9)" if self.running else "Start capture  (F9)")
-        self.start_btn.setObjectName("stopButton" if self.running else "primaryButton")
+        self.start_btn.setText("■  STOP CAPTURE   F9" if self.running else "▶  START CAPTURE   F9")
+        self.start_btn.setObjectName("stopButton" if self.running else "startButton")
         self.start_btn.style().unpolish(self.start_btn)
         self.start_btn.style().polish(self.start_btn)
         (self.timer.start if self.running else self.timer.stop)()
@@ -500,6 +630,7 @@ class MainWindow(QMainWindow):
 
     # ── Sending who is alive ─────────────────────────────────────────
     def _state_changed(self):
+        self._update_team_counts()
         if self.overlay_window:
             self.overlay_window.update_state(self.team_alive[0], self.team_alive[1])
         if self.broadcast_id:

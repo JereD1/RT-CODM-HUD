@@ -1,28 +1,4 @@
-([('PIL\\_avif.cp314-win_amd64.pyd',
-   'C:\\Users\\Omoruyi '
-   'Pc\\Downloads\\codm-hud\\desktop\\.venv\\Lib\\site-packages\\PIL\\_avif.cp314-win_amd64.pyd',
-   'EXTENSION'),
-  ('PIL\\_imaging.cp314-win_amd64.pyd',
-   'C:\\Users\\Omoruyi '
-   'Pc\\Downloads\\codm-hud\\desktop\\.venv\\Lib\\site-packages\\PIL\\_imaging.cp314-win_amd64.pyd',
-   'EXTENSION'),
-  ('PIL\\_imagingcms.cp314-win_amd64.pyd',
-   'C:\\Users\\Omoruyi '
-   'Pc\\Downloads\\codm-hud\\desktop\\.venv\\Lib\\site-packages\\PIL\\_imagingcms.cp314-win_amd64.pyd',
-   'EXTENSION'),
-  ('PIL\\_imagingmath.cp314-win_amd64.pyd',
-   'C:\\Users\\Omoruyi '
-   'Pc\\Downloads\\codm-hud\\desktop\\.venv\\Lib\\site-packages\\PIL\\_imagingmath.cp314-win_amd64.pyd',
-   'EXTENSION'),
-  ('PIL\\_imagingtk.cp314-win_amd64.pyd',
-   'C:\\Users\\Omoruyi '
-   'Pc\\Downloads\\codm-hud\\desktop\\.venv\\Lib\\site-packages\\PIL\\_imagingtk.cp314-win_amd64.pyd',
-   'EXTENSION'),
-  ('PIL\\_webp.cp314-win_amd64.pyd',
-   'C:\\Users\\Omoruyi '
-   'Pc\\Downloads\\codm-hud\\desktop\\.venv\\Lib\\site-packages\\PIL\\_webp.cp314-win_amd64.pyd',
-   'EXTENSION'),
-  ('PySide6\\MSVCP140.dll',
+([('PySide6\\MSVCP140.dll',
    'C:\\Users\\Omoruyi '
    'Pc\\Downloads\\codm-hud\\desktop\\.venv\\Lib\\site-packages\\PySide6\\MSVCP140.dll',
    'BINARY'),
@@ -617,10 +593,6 @@
   ('_decimal.pyd',
    'C:\\Users\\Omoruyi '
    'Pc\\AppData\\Local\\Programs\\Python\\Python314\\DLLs\\_decimal.pyd',
-   'EXTENSION'),
-  ('_elementtree.pyd',
-   'C:\\Users\\Omoruyi '
-   'Pc\\AppData\\Local\\Programs\\Python\\Python314\\DLLs\\_elementtree.pyd',
    'EXTENSION'),
   ('_hashlib.pyd',
    'C:\\Users\\Omoruyi '
