@@ -1,5 +1,12 @@
+import os
 import sys
 import ctypes
+
+# Work in real screen pixels. With Windows display scaling (125%, 150%) Qt
+# would otherwise measure the boxes you draw in scaled units while the
+# capture reads real pixels, so it would watch the wrong part of the screen.
+# Must be set before Qt starts.
+os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QIcon

@@ -1,4 +1,5 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, parse_qs
 
 from PySide6.QtCore import QTimer, Qt
@@ -11,7 +12,7 @@ import numpy as np
 import mss
 
 from config import LAYOUTS_FILE, POLL_INTERVAL_MS, NUM_TEAMS, PLAYERS_PER_TEAM
-from analysis import Templates, analyse_frame
+from analysis import read_bar
 from state import PlayerState, evaluate
 from capture import grab_region, list_monitors, monitor_for_region, monitor_signature
 from poster import post_alive_status
@@ -178,10 +179,10 @@ class SlotRow(QWidget):
         self.region_label.setText((self.region_label.text() or "") + "  ⚠")
         self.region_label.setStyleSheet("color: #f87171; font-weight: 600;")
 
-    def set_status(self, status: str, signal: dict | None = None):
+    def set_status(self, status: str, info: dict | None = None):
         styles = {
             "alive": ("#4ade80", "#0f2b18"), "dead": ("#f87171", "#2b0f0f"),
-            "low": ("#fbbf24", "#2b2410"), "warming": ("#94a3b8", "#1a1d26"),
+            "low": ("#fbbf24", "#2b2410"), "paused": ("#94a3b8", "#1a1d26"),
             "—": ("#6b7280", "#1a1d26"),
         }
         fg, bg = styles.get(status, ("#9ca3af", "#1a1d26"))
@@ -189,10 +190,15 @@ class SlotRow(QWidget):
         self.status_label.setStyleSheet(
             f"color: {fg}; background-color: {bg}; border-radius: 5px; "
             f"font-weight: 600; padding: 2px 8px;")
-        if signal:
+        if status == "paused":
+            self.signal_label.setText("HUD hidden — holding")
+        elif info:
+            change = info.get("change")
             self.signal_label.setText(
-                f"b={signal.get('brightness', 0):.0f}  d={signal.get('dead_sim', 0):.2f}  "
-                f"a={signal.get('alive_sim', 0):.2f}  v={signal.get('pixel_votes', 0)}")
+                f"hp {info.get('health', 0):.0%}  bar {info.get('run', 0)}px  "
+                f"portrait change {'—' if change is None else f'{change:.2f}'}")
+        else:
+            self.signal_label.setText("")
 
     def set_thumbnail(self, rgb: np.ndarray):
         pix = _rgb_to_pixmap(rgb).scaled(self.thumb_label.width(), self.thumb_label.height())
@@ -209,7 +215,6 @@ class MainWindow(QMainWindow):
         self.session = auth.load_cached_session()
         self.broadcast_id = self.session.get("broadcastId") if self.session else None
 
-        self.templates = Templates()
         self.sct = mss.mss()
         self.player_states = {
             (t, p): PlayerState(t, p)
@@ -221,6 +226,12 @@ class MainWindow(QMainWindow):
         self.running = False
         self.consecutive_push_failures = 0
         self.last_push_ok = None  # None = never posted yet
+        # Pushes run on a background thread, so a slow connection never
+        # freezes capture. One at a time; a change made while one is in
+        # flight is sent (with the latest state) as soon as it finishes.
+        self._push_pool = ThreadPoolExecutor(max_workers=1)
+        self._push_future = None
+        self._push_again = False
 
         self._build_ui()
         self._load_layout()
@@ -229,6 +240,11 @@ class MainWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.setInterval(POLL_INTERVAL_MS)
         self.timer.timeout.connect(self._tick)
+
+        self.push_timer = QTimer(self)
+        self.push_timer.setInterval(100)
+        self.push_timer.timeout.connect(self._collect_push)
+        self.push_timer.start()
 
         # ── Fast recovery shortcuts — no mouse required mid-broadcast ──
         QShortcut(QKeySequence("F9"), self, activated=self._toggle_capture)
@@ -406,6 +422,7 @@ class MainWindow(QMainWindow):
 
     def _region_picked(self, slot: SlotRow, region):
         slot.set_region(region)
+        self.player_states[(slot.team_index, slot.player_index)].reset(forget_box=True)
         self._save_layout()
         self._update_health_bar()
 
@@ -418,6 +435,7 @@ class MainWindow(QMainWindow):
     def _quick_setup_complete(self, regions: dict):
         for key, region in regions.items():
             self.slots[key].set_region(region)
+            self.player_states[key].reset(forget_box=True)
         self._save_layout()
         self._update_health_bar()
 
@@ -461,60 +479,81 @@ class MainWindow(QMainWindow):
 
     def _tick(self):
         changed = False
-        for (team, player), slot in self.slots.items():
-            if not slot.region:
-                continue
+        frames = {}
+        for key, slot in self.slots.items():
+            if slot.region:
+                rgb = grab_region(self.sct, slot.region)
+                slot.set_thumbnail(rgb)
+                frames[key] = (rgb, read_bar(rgb))
+        # No card shows a bar: the HUD is hidden, so nobody changes
+        hud_visible = any(bar.present for _, bar in frames.values())
+        for (team, player), (rgb, bar) in frames.items():
+            slot = self.slots[(team, player)]
             state = self.player_states[(team, player)]
-            if state.in_cooldown():
-                continue
-
-            rgb = grab_region(self.sct, slot.region)
-            slot.set_thumbnail(rgb)
-            signal = analyse_frame(rgb, self.templates)
-            flipped, status = evaluate(state, signal)
-            slot.set_status(status, signal)
-
+            flipped, status, info = evaluate(state, rgb, bar, hud_visible)
+            slot.set_status(status, info)
             if flipped:
                 self.team_alive[team][player] = not state.is_dead
                 changed = True
+        if changed:
+            self._state_changed()
 
-        if changed and self.broadcast_id:
-            ok, info = post_alive_status(self.broadcast_id, self.session["broadcastToken"], self.team_alive[0], self.team_alive[1])
-            self.last_push_ok = ok
-            self.consecutive_push_failures = 0 if ok else self.consecutive_push_failures + 1
-            self.status_bar_label.setText(f"{'✓ posted' if ok else '✗ post failed'} — {info}")
-            if self.overlay_window:
-                self.overlay_window.update_state(self.team_alive[0], self.team_alive[1])
-            self._update_health_bar()
-        elif changed:
+    # ── Sending who is alive ─────────────────────────────────────────
+    def _state_changed(self):
+        if self.overlay_window:
+            self.overlay_window.update_state(self.team_alive[0], self.team_alive[1])
+        if self.broadcast_id:
+            self._push()
+        else:
             self.status_bar_label.setText("State changed, but no overlay connected — not posted.")
             self._update_health_bar()
 
-    def _reset_all(self):
+    def _push(self):
+        if not self.broadcast_id or not self.session:
+            return
+        if self._push_future is not None:
+            self._push_again = True
+            return
+        self._push_future = self._push_pool.submit(
+            post_alive_status, self.broadcast_id, self.session["broadcastToken"],
+            list(self.team_alive[0]), list(self.team_alive[1]))
+
+    def _collect_push(self):
+        future = self._push_future
+        if future is None or not future.done():
+            return
+        self._push_future = None
+        try:
+            ok, info = future.result()
+        except Exception as e:
+            ok, info = False, str(e)
+        self.last_push_ok = ok
+        self.consecutive_push_failures = 0 if ok else self.consecutive_push_failures + 1
+        self.status_bar_label.setText(f"{'✓ posted' if ok else '✗ post failed'} — {info}")
+        self._update_health_bar()
+        if self._push_again:
+            self._push_again = False
+            self._push()
+
+    def _all_alive(self):
         for state in self.player_states.values():
-            state.is_dead = False
-            state.cooldown_until = 0
-            state.samples = []
-            state.consecutive_dead = 0
-            state.consecutive_alive = 0
+            state.reset()
         self.team_alive = {0: [True] * PLAYERS_PER_TEAM, 1: [True] * PLAYERS_PER_TEAM}
+
+    def _reset_all(self):
+        """Everyone alive, readings cleared, and the overlay told."""
+        self._all_alive()
         for slot in self.slots.values():
             slot.set_status("—")
+        self._state_changed()
 
     def _set_all_alive(self):
-        for state in self.player_states.values():
-            state.is_dead = False
-            state.cooldown_until = 0
-            state.consecutive_dead = 0
-            state.consecutive_alive = 0
-        self.team_alive = {0: [True] * PLAYERS_PER_TEAM, 1: [True] * PLAYERS_PER_TEAM}
-        if self.broadcast_id:
-            ok, _ = post_alive_status(self.broadcast_id, self.session["broadcastToken"], self.team_alive[0], self.team_alive[1])
-            self.last_push_ok = ok
-            self.consecutive_push_failures = 0 if ok else self.consecutive_push_failures + 1
-        if self.overlay_window:
-            self.overlay_window.update_state(self.team_alive[0], self.team_alive[1])
-        self._update_health_bar()
+        self._all_alive()
+        self._state_changed()
+
+    def closeEvent(self, event):
+        self._push_pool.shutdown(wait=False, cancel_futures=True)
+        super().closeEvent(event)
 
     def _toggle_overlay_window(self):
         if self.overlay_window:

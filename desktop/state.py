@@ -1,10 +1,26 @@
-import time
-from dataclasses import dataclass, field
-from statistics import mean, pstdev
+"""Turns each frame's card reading into a steady alive/dead state.
 
+- Alive → dead: the health bar is missing DEAD_FRAMES frames in a row and
+  the portrait has changed from the player's normal look (the death fade),
+  or the bar has been missing DEAD_FAILSAFE_FRAMES frames whatever the
+  portrait does.
+- Dead → alive: the bar is back ALIVE_FRAMES frames in a row (it returns
+  at full length on respawn).
+
+The HUD as a whole decides two more things (hud_visible: does any card
+show a bar this frame?):
+- Hidden HUD (scoreboard, killcam, between rounds): nobody changes.
+- A box that has never shown a bar while other cards do is a player who
+  was already dead when capture started (Search & Destroy), so the same
+  rules apply to it as to anyone else.
+"""
+from dataclasses import dataclass
+
+import numpy as np
+
+from analysis import BarReading, portrait_thumb, thumb_change
 from config import (
-    WINDOW_SIZE, DEAD_SIGMA, ALIVE_SIGMA, MIN_STDDEV,
-    CONSISTENCY_FRAMES, COOLDOWN_MS, DEAD_SIM_THRESHOLD, ALIVE_SIM_THRESHOLD,
+    DEAD_FRAMES, ALIVE_FRAMES, DEAD_PORTRAIT_CHANGE, DEAD_FAILSAFE_FRAMES, LOW_HEALTH,
 )
 
 
@@ -13,82 +29,69 @@ class PlayerState:
     team_index: int
     player_index: int
     is_dead: bool = False
-    cooldown_until: float = 0.0
-    samples: list = field(default_factory=list)
-    consecutive_dead: int = 0
-    consecutive_alive: int = 0
+    health: float = 1.0
+    full_run: int = 0          # longest bar seen = full health, in pixels
+    missing: int = 0
+    present: int = 0
+    # The player's normal portrait while alive with a bar, kept as a slow
+    # running average so the spectate highlight or a flash doesn't stick
+    normal_thumb: np.ndarray | None = None
 
-    def in_cooldown(self) -> bool:
-        return time.monotonic() < self.cooldown_until
+    def reset(self, forget_box: bool = False):
+        """Everyone alive again. forget_box also drops what was learned
+        about the box (bar length, normal portrait), for a moved box."""
+        if forget_box:
+            self.full_run = 0
+            self.normal_thumb = None
+        self.is_dead = False
+        self.health = 1.0
+        self.missing = 0
+        self.present = 0
 
-    def start_cooldown(self):
-        self.cooldown_until = time.monotonic() + (COOLDOWN_MS / 1000)
 
+def evaluate(state: PlayerState, rgb: np.ndarray, bar: BarReading, hud_visible: bool) -> tuple[bool, str, dict]:
+    """bar: read_bar(rgb) for this box. hud_visible: some card shows a bar
+    this frame. Returns (flipped, status, info); status is paused, alive,
+    low or dead."""
+    thumb = portrait_thumb(rgb, bar.top if bar.present else None)
+    change = thumb_change(thumb, state.normal_thumb) if state.normal_thumb is not None else None
+    if bar.present:
+        state.full_run = max(state.full_run, bar.run)
+    health = bar.run / state.full_run if bar.present and state.full_run else 0.0
+    info = {"health": health, "change": change, "run": bar.run}
 
-def evaluate(state: PlayerState, signal: dict) -> tuple[bool, str]:
-    brightness = signal["brightness"]
-    low_health = signal["low_health"]
-    pixel_votes = signal["pixel_votes"]
-    dead_sim = signal["dead_sim"]
-    alive_sim = signal["alive_sim"]
-
-    if len(state.samples) < 5:
-        if not low_health:
-            state.samples.append(brightness)
-            if len(state.samples) > WINDOW_SIZE:
-                state.samples.pop(0)
-        return False, "warming"
-
-    mu = mean(state.samples)
-    sd = max(pstdev(state.samples) if len(state.samples) > 1 else 0, MIN_STDDEV)
-    dead_threshold = mu - DEAD_SIGMA * sd
-    alive_threshold = mu - ALIVE_SIGMA * sd
-
-    sigma_votes_dead = brightness < dead_threshold
-    ncc_votes_dead = (
-        True if not signal["has_dead_template"]
-        else (dead_sim >= DEAD_SIM_THRESHOLD and dead_sim > alive_sim)
-    )
-
-    frame_is_dead = (not low_health) and (
-        pixel_votes >= 3 or (sigma_votes_dead and ncc_votes_dead)
-    )
-
-    if not state.is_dead:
-        if frame_is_dead:
-            state.consecutive_dead += 1
-            state.consecutive_alive = 0
-        else:
-            state.consecutive_dead = 0
-            if (not low_health and brightness >= alive_threshold) or low_health:
-                state.samples.append(brightness)
-                if len(state.samples) > WINDOW_SIZE:
-                    state.samples.pop(0)
-    else:
-        reviving = brightness > alive_threshold and (
-            not signal["has_alive_template"] or alive_sim >= ALIVE_SIM_THRESHOLD
-        )
-        if reviving:
-            state.consecutive_alive += 1
-            state.consecutive_dead = 0
-        else:
-            state.consecutive_alive = 0
+    if not hud_visible:
+        return False, "paused", info
 
     flipped = False
-    if not state.is_dead and state.consecutive_dead >= CONSISTENCY_FRAMES:
-        state.is_dead = True
-        state.consecutive_dead = 0
-        state.consecutive_alive = 0
-        flipped = True
-    elif state.is_dead and state.consecutive_alive >= CONSISTENCY_FRAMES:
-        state.is_dead = False
-        state.consecutive_dead = 0
-        state.consecutive_alive = 0
-        state.samples = [brightness] * WINDOW_SIZE
-        flipped = True
+    if not state.is_dead:
+        if bar.present:
+            state.missing = 0
+            state.health = health
+            state.normal_thumb = thumb if state.normal_thumb is None else state.normal_thumb * 0.9 + thumb * 0.1
+        else:
+            state.missing += 1
+            faded = change is None or change >= DEAD_PORTRAIT_CHANGE
+            if (state.missing >= DEAD_FRAMES and faded) or state.missing >= DEAD_FAILSAFE_FRAMES:
+                state.is_dead = True
+                state.health = 0.0
+                state.present = 0
+                flipped = True
+    else:
+        if bar.present:
+            state.present += 1
+            if state.present >= ALIVE_FRAMES:
+                state.is_dead = False
+                state.health = health
+                state.missing = 0
+                flipped = True
+        else:
+            state.present = 0
 
-    if flipped:
-        state.start_cooldown()
-
-    status = "low" if low_health else ("dead" if state.is_dead else "alive")
-    return flipped, status
+    if state.is_dead:
+        status = "dead"
+    elif bar.present and (bar.orange or health < LOW_HEALTH):
+        status = "low"
+    else:
+        status = "alive"
+    return flipped, status, info

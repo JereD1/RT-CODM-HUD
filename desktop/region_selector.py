@@ -3,8 +3,7 @@ from PySide6.QtGui import QPainter, QColor, QPen
 from PySide6.QtWidgets import QWidget, QApplication, QLabel, QPushButton
 
 from config import (
-    PLAYERS_PER_TEAM, QUICKSETUP_BOX_WIDTH, QUICKSETUP_BOX_HEIGHT,
-    QUICKSETUP_GAP, QUICKSETUP_TOP_MARGIN,
+    PLAYERS_PER_TEAM, CARD_LEFT_X, CARD_RIGHT_X, CARD_PITCH, CARD_WIDTH, CARD_TOP, CARD_HEIGHT,
 )
 
 
@@ -138,8 +137,10 @@ class DraggableBox(QWidget):
 
 class QuickRegionSetup(QWidget):
     """Draws all 10 player-region boxes at once over the whole virtual
-    desktop. Operator nudges each onto its player's white stripe and
-    confirms once, instead of picking 10 regions one at a time."""
+    desktop, laid out where the CODM spectator HUD puts the player cards
+    (5 top left, 5 top right) on the primary screen. The operator nudges
+    each onto its card, covering the portrait and the health bar under it,
+    and confirms once."""
     setup_complete = Signal(dict)   # {(team, player): region}
     cancelled = Signal()
 
@@ -154,18 +155,19 @@ class QuickRegionSetup(QWidget):
         left_color = QColor(80, 200, 255)
         right_color = QColor(255, 170, 80)
 
+        # Card positions scale with the screen (measured on a 1920×1080 HUD)
+        sx, sy = primary.width(), primary.height()
+        px, py = primary.x() - origin.x(), primary.y() - origin.y()
+        w, h = round(CARD_WIDTH * sx), round(CARD_HEIGHT * sy)
+        y = py + round(CARD_TOP * sy)
         self.boxes: dict[tuple[int, int], DraggableBox] = {}
         for p in range(PLAYERS_PER_TEAM):
-            lx = primary.x() - origin.x() + 10
-            ly = primary.y() - origin.y() + QUICKSETUP_TOP_MARGIN + p * (QUICKSETUP_BOX_HEIGHT + QUICKSETUP_GAP)
+            lx = px + round((CARD_LEFT_X + p * CARD_PITCH) * sx)
             self.boxes[(0, p)] = self._make_box(
-                (existing or {}).get((0, p)), origin,
-                QRect(lx, ly, QUICKSETUP_BOX_WIDTH, QUICKSETUP_BOX_HEIGHT), f"L{p+1}", left_color)
-
-            rx = primary.x() - origin.x() + primary.width() - QUICKSETUP_BOX_WIDTH - 10
+                (existing or {}).get((0, p)), origin, QRect(lx, y, w, h), f"L{p+1}", left_color)
+            rx = px + round((CARD_RIGHT_X + p * CARD_PITCH) * sx)
             self.boxes[(1, p)] = self._make_box(
-                (existing or {}).get((1, p)), origin,
-                QRect(rx, ly, QUICKSETUP_BOX_WIDTH, QUICKSETUP_BOX_HEIGHT), f"R{p+1}", right_color)
+                (existing or {}).get((1, p)), origin, QRect(rx, y, w, h), f"R{p+1}", right_color)
 
         self.confirm_btn = QPushButton("Confirm setup (Enter)", self)
         self.confirm_btn.setStyleSheet(
@@ -178,14 +180,15 @@ class QuickRegionSetup(QWidget):
         self.confirm_btn.raise_()
 
         self.hint_label = QLabel(
-            "Drag each box onto its player's white stripe. Drag the bottom-right "
-            "corner to resize. Enter to confirm, Esc to cancel.", self)
+            "Drag each box onto its player card: the portrait and the health bar under it. "
+            "Drag the bottom-right corner to resize. Enter to confirm, Esc to cancel.", self)
         self.hint_label.setStyleSheet(
             "color: white; background: rgba(0,0,0,160); padding: 6px 10px; font-size: 12px;")
         self.hint_label.adjustSize()
         self.hint_label.move(
             primary.x() - origin.x() + primary.width() // 2 - self.hint_label.width() // 2,
-            primary.y() - origin.y() + 4)
+            # Below the cards, so it doesn't cover them
+            primary.y() - origin.y() + round(primary.height() * 0.2))
         self.hint_label.raise_()
 
     def _make_box(self, existing_region, origin, default_rect, label, color) -> DraggableBox:

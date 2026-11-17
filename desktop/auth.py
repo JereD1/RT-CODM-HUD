@@ -1,9 +1,7 @@
 import json
 import requests
 
-from config import WEB_BASE_URL, SESSION_FILE
-
-RESOLVE_URL = f"https://realtime-production.vercel.app/api/overlay-token/resolve"
+from config import RESOLVE_URL, SESSION_FILE
 
 
 def load_cached_session() -> dict | None:
